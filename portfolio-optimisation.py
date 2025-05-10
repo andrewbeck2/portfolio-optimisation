@@ -15,6 +15,32 @@ def get_user_input():
     benchmark = input("Enter benchmark ticker (S&P500 - SPY, ASX200 - ^AXJO): ").upper().strip() or "SPY"
     return [t.strip() for t in tickers], start, end, benchmark
 
+def get_user_weights():
+    print("\n Assign weights to each metric (total should add up to 100)")
+    try:
+        w_sharpe = float(input("Weight for Sharpe Ratio: "))
+        w_beta = float(input("Weight for Beta: "))
+        w_upside = float(input("Weight for Upside: "))
+    except ValueError:
+        print("Invalid input. Please enter numbers.")
+        return get_user_weights()
+
+    total = w_sharpe + w_beta + w_upside
+    if total != 100:
+        print(f"Total = {total}. Normalizing weights to sum to 100.")
+        w_sharpe = w_sharpe / total * 100
+        w_beta = w_beta / total * 100
+        w_upside = w_upside / total * 100
+
+    return {'Sharpe Ratio': w_sharpe, 'Beta': w_beta, 'Upside %': w_upside}
+
+def get_backtest_dates():
+    print("\n Backtest Portfolio Performance")
+    start = input("Enter new start date (YYYY-MM-DD): ")
+    end = input("Enter new end date (YYYY-MM-DD): ")
+    return start, end
+
+
 def download_data(tickers, start, end, benchmark):
     try:
         all_tickers = tickers + [benchmark]
@@ -117,6 +143,76 @@ def plot_indexed_prices(price_data, tickers):
     plt.tight_layout()
     plt.show()
 
+def min_max_normalize(series):
+    return (series - series.min()) / (series.max() - series.min())
+
+def calculate_scores(metrics, weights):
+    # Min-max normalize Sharpe and Upside
+    normalized = pd.DataFrame()
+    normalized['Sharpe Ratio'] = min_max_normalize(metrics['Sharpe Ratio'])
+    normalized['Upside %'] = min_max_normalize(metrics['Upside %'])
+
+    # Penalize Beta > 1 only
+    beta_penalty = metrics['Beta'].copy()
+    beta_penalty[beta_penalty <= 1] = 0
+    beta_penalty[beta_penalty > 1] = beta_penalty[beta_penalty > 1] - 1
+    normalized['Beta'] = -min_max_normalize(beta_penalty)
+
+    # Weighted score
+    score = (
+        normalized['Sharpe Ratio'] * weights['Sharpe Ratio'] +
+        normalized['Beta'] * weights['Beta'] +
+        normalized['Upside %'] * weights['Upside %']
+    )
+
+    metrics['Score'] = score
+    metrics['Weight'] = score / score.sum()
+
+    return metrics
+
+def backtest_portfolio(tickers, weights, benchmark, start, end):
+    all_tickers = tickers + [benchmark]
+    data = yf.download(all_tickers, start=start, end=end)['Close']
+
+    # Normalize and calculate
+    returns = data.pct_change().dropna()
+    port_returns = (returns[tickers] * weights).sum(axis=1)
+    port_value = (1 + port_returns).cumprod()
+    bench_value = (1 + returns[benchmark]).cumprod()
+
+    # Plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(port_value, label="Portfolio")
+    plt.plot(bench_value, label=benchmark)
+    plt.title("📊 Portfolio vs Benchmark (Indexed)")
+    plt.xlabel("Date")
+    plt.ylabel("Cumulative Value")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    # Backtest stats
+    days = len(port_value)
+    cagr_port = (port_value.iloc[-1] / port_value.iloc[0]) ** (252 / days) - 1
+    cagr_bench = (bench_value.iloc[-1] / bench_value.iloc[0]) ** (252 / days) - 1
+
+    total_return_port = port_value.iloc[-1] - 1
+    total_return_bench = bench_value.iloc[-1] - 1
+    active_return = total_return_port - total_return_bench
+
+    sharpe = port_returns.mean() / port_returns.std() * np.sqrt(252)
+    beta = np.cov(port_returns, returns[benchmark])[0][1] / np.var(returns[benchmark])
+
+    # Print stats
+    print(f"\n Portfolio Stats ({start} to {end}):")
+    print(f"  CAGR (Portfolio): {cagr_port:.2%}")
+    print(f"  CAGR (Benchmark): {cagr_bench:.2%}")
+    print(f"  Total Return: {total_return_port:.2%}")
+    print(f"  Benchmark Return: {total_return_bench:.2%}")
+    print(f"  Active Return: {active_return:.2%}")
+    print(f"  Sharpe Ratio: {sharpe:.2f}")
+    print(f"  Beta to {benchmark}: {beta:.2f}")
+
 def main():
     tickers, start, end, benchmark = get_user_input()
     prices, benchmark = download_data(tickers, start, end, benchmark)
@@ -128,10 +224,20 @@ def main():
     print("\n Price data fetched.")
     metrics, returns = calculate_metrics(prices, tickers, benchmark)
     print("\n Metrics:\n", metrics)
-    correlation_matrix = returns[tickers].corr()
-    print("\nCorrelation Matrix:\n", correlation_matrix)
+    weights = get_user_weights()
+    metrics = calculate_scores(metrics, weights)
+    print("\n Scored Metrics:\n", metrics[['Sharpe Ratio', 'Beta', 'Upside %', 'Score', 'Weight']])
     plot_correlation_heatmap(returns[tickers])
     plot_indexed_prices(prices[tickers], tickers)
+    bt_start, bt_end = get_backtest_dates()
+    portfolio_weights = metrics.set_index(metrics.index)['Weight']
+    backtest_portfolio(
+        tickers=tickers,
+        weights=portfolio_weights,
+        benchmark=benchmark,
+        start=bt_start,
+        end=bt_end
+    )
 
 if __name__ == "__main__":
     main()
