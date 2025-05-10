@@ -2,12 +2,17 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 def get_user_input():
     tickers = input("Enter tickers separated by commas (e.g., AAPL,MSFT,BHP.AX): ").upper().split(',')
     start = input("Enter start date (YYYY-MM-DD): ")
     end = input("Enter end date (YYYY-MM-DD): ")
-    benchmark = input("Enter benchmark ticker (default: SPY): ").upper().strip() or "SPY"
+    benchmark = input("Enter benchmark ticker (S&P500 - SPY, ASX200 - ^AXJO): ").upper().strip() or "SPY"
     return [t.strip() for t in tickers], start, end, benchmark
 
 def download_data(tickers, start, end, benchmark):
@@ -48,7 +53,6 @@ def calculate_metrics(price_data, tickers, benchmark):
     for ticker in tickers:
         try:
             tkr = yf.Ticker(ticker)
-            time.sleep(1.5)  # avoid rate limits
             target_data = tkr.get_analyst_price_targets()
             target_price = target_data.get('mean')
             if target_price is not None:
@@ -72,6 +76,47 @@ def calculate_metrics(price_data, tickers, benchmark):
 
     return metrics, returns
 
+def plot_correlation_heatmap(returns):
+    corr = returns.corr()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr, annot=True, fmt=".2f", cmap='coolwarm', center=0, linewidths=0.5)
+    plt.title("Asset Correlation Heatmap")
+    plt.tight_layout()
+    plt.show()
+
+def plot_indexed_prices(price_data, tickers):
+    plt.figure(figsize=(12, 6))
+
+    colors = plt.colormaps["tab10"].resampled(len(tickers))
+    indexed = price_data / price_data.iloc[0]
+
+    for i, ticker in enumerate(tickers):
+        # Plot indexed line
+        plt.plot(indexed.index, indexed[ticker], label=ticker, color=colors(i))
+
+        # Fetch analyst price target
+        try:
+            tkr = yf.Ticker(ticker)
+            target_data = tkr.get_analyst_price_targets()
+            target_price = target_data.get('mean')
+            if target_price:
+                first_price = price_data[ticker].iloc[0]
+                target_indexed = target_price / first_price
+
+                # Plot as a dot (same color)
+                plt.scatter(indexed.index[-1], target_indexed,
+                            color=colors(i), marker='o', s=80, edgecolors='black',
+                            label=f"{ticker} target")
+        except Exception as e:
+            print(f"Could not fetch target for {ticker}: {e}")
+
+    plt.title("Indexed Price Performance with Analyst Targets (Start = 1)")
+    plt.xlabel("Date")
+    plt.ylabel("Normalized Value")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
 def main():
     tickers, start, end, benchmark = get_user_input()
     prices, benchmark = download_data(tickers, start, end, benchmark)
@@ -80,9 +125,13 @@ def main():
         print("No price data. Exiting.")
         return
 
-    print("\n✅ Price data fetched.")
+    print("\n Price data fetched.")
     metrics, returns = calculate_metrics(prices, tickers, benchmark)
-    print("\n📊 Metrics:\n", metrics)
+    print("\n Metrics:\n", metrics)
+    correlation_matrix = returns[tickers].corr()
+    print("\nCorrelation Matrix:\n", correlation_matrix)
+    plot_correlation_heatmap(returns[tickers])
+    plot_indexed_prices(prices[tickers], tickers)
 
 if __name__ == "__main__":
     main()
