@@ -1,12 +1,8 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import time
 import matplotlib.pyplot as plt
 import seaborn as sns
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
 
 def get_user_input():
     tickers = input("Enter tickers separated by commas (e.g., AAPL,MSFT,BHP.AX): ").upper().split(',')
